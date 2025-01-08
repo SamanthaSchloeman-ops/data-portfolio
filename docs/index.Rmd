@@ -1,0 +1,275 @@
+---
+title: "Bellabeat Case Study"
+output: html_document
+date: "2024-11-27"
+author: Samantha Schloeman
+---
+## The Business Task 
+#### In this case study, we're tasked with analyzing fitbit user data from the FitBit Fitness Tracker dataset found on Kaggle: <https://www.kaggle.com/datasets/arashnic/fitbit> (CC0: Public Domain, dataset made available through Mobius).
+
+#### Our goal is to understand user behavior in order to supply the Bellabeat marketing team with a set of recommendations to grow one of the brand's product offerings. In this case, I chose to focus on the brand's wellness application, the Bellabeat App. 
+
+#### The questions underlying my analysis include: 
+-What trends exist in smart device usage?   
+-How could these trends apply to Bellabeat customers?   
+-How could these trends influence the Bellabeat marketing strategy?   
+
+## Download and Inspect the Data
+#### Setting up the environment
+```{r, message=FALSE, results='hide'}
+#Load libraries
+library(readr)  
+library(janitor)  
+library(here)
+library(skimr)
+library(dplyr)  
+library(lubridate)  
+library(ggplot2) 
+library(tidyr)
+library(Hmisc)
+
+#read files
+dailyactivity_merged_marapr <- read_csv("dailyActivity_merged.csv")
+dailyactivity_merged_aprmay <- read_csv("dailyActivity_merged_AprMay.csv")
+weightmarapr <- read_csv("weightLogInfo_merged_MarApr.csv")
+weightaprmay <- read_csv("weightLogInfo_merged_AprMay.csv")
+```
+
+
+```{r}
+#Review
+head(dailyactivity_merged_marapr)
+head(dailyactivity_merged_aprmay)
+head(weightmarapr)
+head(weightaprmay)
+
+skim_without_charts(dailyactivity_merged_marapr)
+skim_without_charts(dailyactivity_merged_aprmay)
+skim_without_charts(weightmarapr)
+skim_without_charts(weightaprmay)
+```
+#### The unique user Id column will be useful. 
+
+
+#### Synchronize the date variables. Remove duplicates, unwanted columns, and compare column names to merge the like dataframes. 
+
+```{r}
+#Remove duplicates
+dailyactivity_merged_marapr <- distinct(dailyactivity_merged_marapr)
+dailyactivity_merged_aprmay <- distinct(dailyactivity_merged_aprmay)
+weightmarapr <- distinct(weightmarapr)
+weightaprmay <- distinct(weightaprmay)
+
+#Remove unwanted columns
+weightmarapr <- weightmarapr %>%
+  select(-Fat, -BMI, -WeightKg)
+weightaprmay <- weightaprmay %>%
+  select(-Fat, -BMI, -WeightKg)
+
+#Compare col names for the rbind
+compare_df_cols_same(dailyactivity_merged_marapr, dailyactivity_merged_aprmay)
+compare_df_cols_same(weightmarapr, weightaprmay)
+
+#merge like dataframes 
+daily_activity <- rbind(dailyactivity_merged_marapr, dailyactivity_merged_aprmay)
+daily_weight <- rbind(weightmarapr, weightaprmay)
+
+#Convert character to date in the activity df
+daily_activity <- daily_activity %>%
+  mutate(ActivityDate = convert_to_date(ActivityDate, 
+                                        character_fun = lubridate::mdy))
+
+#Isolate date from time in the weight df
+daily_weight <- daily_weight %>%
+  separate(Date, c("Day", NA), " ", remove = FALSE, extra = "merge") %>%
+  mutate(Day = convert_to_date(Day,
+                                character_fun = lubridate::mdy))
+```
+
+#### How many unique participants are in each df? 
+```{r}
+n_distinct(daily_activity$Id) 
+n_distinct(daily_weight$Id) 
+```
+
+#### We'll focus on sedentary minutes, very active minutes, calories, and weight in this analysis. More time spent sedentary is correlated with adverse health outcomes according to [the NIH.](https://pmc.ncbi.nlm.nih.gov/articles/PMC6527341/#:~:text=Results:,the%202018%20PAGAC%20Scientific%20Report.) 
+
+#### Summary statistics
+```{r}
+daily_activity %>%
+  select(TotalSteps, TotalDistance, SedentaryMinutes) %>%
+  summary()
+
+daily_weight %>%
+  select(WeightPounds, IsManualReport) %>%
+  summary()
+```
+#### 75% of our participants log less than 11k steps per day and spend more than 729 minutes (>12 hours) sedentary. 75% are less than 188 lbs and 2/3 of the weight records are manually entered. 
+
+#### How do sedentary minutes change throughout the week? 
+```{r}
+daily_activity$Weekday <- daily_activity$ActivityDate %>% weekdays()
+
+daily_activity %>% 
+  group_by(Weekday) %>% 
+  summarise(mean_sedentary_mins = mean(SedentaryMinutes)) %>%
+  arrange(mean_sedentary_mins) %>%
+  ggplot(aes(x=Weekday, y=mean_sedentary_mins, label=round(mean_sedentary_mins), fill = "ef8d76")) + 
+  geom_col() +
+  geom_text(position = "identity") +
+  geom_hline(aes(yintercept = mean(mean_sedentary_mins))) +
+  labs(y="Mean Sedentary Mins") + 
+  theme_bw() +
+  theme(legend.position = "none")
+```
+
+#### How does weight change through time? 
+```{r}
+daily_weight %>%
+ggplot(aes(x=Day, y=WeightPounds, color=IsManualReport)) +
+  geom_line() + 
+  geom_point() +  
+  facet_wrap(~Id) +
+  labs(y="Weight (lbs)", x="Date", color="Is Manual Report?") +
+  theme_bw() +
+  theme(strip.background = element_rect("white"), legend.position = "bottom") +
+  scale_color_manual(values=c("#f5c885", "#e94472")) 
+```
+
+#### Only 2 out of 13 users are tracking their weight consistently. 
+
+#### What's the relationship between total steps and calories? 
+```{r}
+ggplot(data = daily_activity, aes(x=TotalSteps, y=Calories, color="#e94472")) +
+  geom_point() +
+  geom_smooth() +
+  labs(x="Total Steps") +
+  theme_bw() +
+  theme(legend.position = "none")
+
+cor(daily_activity$TotalSteps, daily_activity$Calories)
+```
+#### Surprisingly, there's only a weak correlation between total steps and calories burned. 
+
+#### How does logged distance differ from total distance? 
+```{r, warning=FALSE}
+daily_activity$LoggedActivitiesDistance %>%
+  summary()
+
+daily_activity$TotalDistance %>%
+  summary()
+
+daily_activity$LoggedPercentage <- ((daily_activity$LoggedActivitiesDistance/daily_activity$TotalDistance)*100)
+summary(daily_activity$LoggedPercentage)
+
+daily_activity %>%
+  na.omit() %>%
+  ggplot(aes(x=LoggedPercentage, fill = "#f5c885")) + 
+  geom_area(stat="bin") +
+  labs(x="Logged Total Activity Distance (%)", y="Count of Days") +
+  theme_bw() +
+  theme(legend.position = "none")
+```
+
+#### Do sedentary minutes change through time spent with the device? 
+```{r}
+daily_activity %>%
+  select(Id, ActivityDate, SedentaryMinutes) %>%
+  ggplot(aes(x=ActivityDate, y=SedentaryMinutes, color=Id)) +
+  geom_point(position="jitter") +
+  theme_bw() +
+  labs(x="Date", y="Sedentary Minutes")
+```
+
+#### Let's look at a small sample of users. 
+```{r}
+sed_avg_wks1and2 <- daily_activity %>%
+  filter(ActivityDate < "2016-03-26") %>%
+  group_by(Id) %>%
+  summarise(mean_sed_mins_first = mean(SedentaryMinutes))
+sed_avg_wks1and2 
+
+sed_avg_lastwk <- daily_activity %>%
+  filter(ActivityDate < "2016-05-12") %>%
+  group_by(Id) %>%
+  summarise(mean_sed_mins_last = mean(SedentaryMinutes))
+sed_avg_lastwk
+
+sed_avg_wks1and2$Id %in% sed_avg_lastwk$Id #Our 4 participants are in the last week 
+sed_time_comp <- inner_join(sed_avg_wks1and2, sed_avg_lastwk, by="Id")
+sed_time_comp %>% 
+  mutate(change = mean_sed_mins_last - mean_sed_mins_first)
+```
+#### 3 of 4 users decreased their sedentary time between the first 2 weeks and the last week. This is an interesting question to explore with long-term data and more users. 
+
+#### How do sedentary minutes change with very active minutes?
+```{r, warning=FALSE}
+ggplot(data=daily_activity, aes(x=VeryActiveMinutes, y=SedentaryMinutes, color=Id)) +
+  geom_point() +
+  theme_bw() +
+  labs(x="Very Active Minutes", y="Sedentary Minutes")
+
+#Take a sample of participants
+user_sample <- sample(daily_activity$Id, 5)
+
+daily_activity %>%
+  filter(Id %in% user_sample) %>% 
+  filter(SedentaryMinutes > 0, VeryActiveMinutes > 0) %>%
+  ggplot(aes(x=VeryActiveMinutes, y=SedentaryMinutes, group=Id, color=Id)) +
+  geom_point() + 
+  geom_smooth() +
+  theme_bw() +
+  labs(x="Very Active Minutes", y="Sedentary Minutes")
+
+cor(daily_activity$VeryActiveMinutes, daily_activity$SedentaryMinutes) 
+```
+#### There is no evidence that a correlation exists between very active and sedentary minutes. 
+
+#### Merge the activity and weight dataframes. 
+```{r}
+names(daily_activity)[2] <- "Day"
+activity_weight_merge <- merge(daily_activity, daily_weight, by=c("Id", "Day"))
+n_distinct(activity_weight_merge$Id) #13
+```
+#### There are 13 unique users after the merge. 
+
+#### Is there any correlation between calories, sedentary time, very active time, and weight? 
+```{r}
+correlation_test <- activity_weight_merge %>%
+  select(Calories, SedentaryMinutes, VeryActiveMinutes, WeightPounds) %>%
+  as.matrix()
+rcorr(correlation_test) 
+#Strong positive correlation between Calories and VeryActiveMinutes
+#Slight positive corrlation between SedentaryMinutes and Calories, WeightPounds and Calories
+#No correlation between VeryActiveMinutes and SedentaryMinutes, WeightPounds and VeryActiveMinutes
+
+#Calories and VeryActiveMinutes 
+activity_weight_merge %>%
+  select(Id, Calories, VeryActiveMinutes, Day) %>%
+  arrange(Day) %>%
+  ggplot(aes(x=Calories, y=VeryActiveMinutes, color=Id)) +
+  geom_point() +
+  theme_bw() +
+  labs(y="Very Active Minutes")
+```
+
+## In Summary 
+### We downloaded, cleaned, and performed exploratory data analysis on FitBit User data to better understand user behavior. 
+#### The data tells us that:
+1. Most users spend their days sedentary. Average sedentary time is above the recommended maximum of 8 hours per day. 
+2. Users do not track their weight consistently. 
+3. 3 out of 4 users suitable for comparison decreased their sedentary minutes over time. 
+4. Users do not log their activity often. 
+5. Surprisingly, calories and total steps are not strongly correlated. Neither are sedentary minutes and very active minutes. There is a strong positive correlation between very active minutes and calories. 
+
+#### These findings suggest that:
+1. Users may struggle to schedule activity breaks throughout their day.
+2. Weight loss may not be the primary goal for most users, as they are not consistently tracking their weight. 
+3. Users may be motivated to spend less time sedentary when they wear their devices. 
+
+### Suggestions for the Bellabeat App marketing strategy
+1. Focus development resources on creating more short form moderate to very high intensity workouts available through the app to encourage users to break up long periods of sitting. 
+2. Survey Bellabeat users about their wellness goals. Create a feature that allows users to disable weight and calorie tracking if they don't find these features useful to their wellness journey. 
+3. Perform a long-term study to explore the relationship between device use and decreased sedentary time. Highlight this benefit in marketing materials. 
+4. Align marketing strategies, including brand ambassadors and partners, with user shift towards holistic wellness. 
+
